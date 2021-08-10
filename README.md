@@ -1,1 +1,1 @@
-# hierarchical-reinforcement-learning-for-sepsis
+# reinforcement-learning-for-sepsis

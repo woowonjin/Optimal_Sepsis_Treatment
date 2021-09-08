@@ -58,7 +58,8 @@ test_acuity = acuity_scores[acuity_scores['traj'].isin(X_test)]
 test_trajectories = test_data['traj'].unique()
 
 # Define the features of the full data
-num_actions = 25
+num_d_actions = 25
+num_c_actions = 2
 state_dim = 47
 num_obs = 33
 num_dem = 5
@@ -117,7 +118,7 @@ data_trajectory['dem_cols'] = dem_cols
 data_trajectory['obs_cols'] = obs_cols
 data_trajectory['ac_col']  = ac_col
 data_trajectory['rew_col'] = rew_col
-data_trajectory['num_actions'] = num_actions
+data_trajectory['num_d_actions'] = num_d_actions
 data_trajectory['obs_dim'] = len(obs_cols)
 data_trajectory['traj'] = {}
 data_trajectory['pos_traj'] = []
@@ -130,7 +131,7 @@ for i in trajectories:
     data_trajectory['traj'][i] = {}
     data_trajectory['traj'][i]['dem'] = torch.Tensor(traj_i[dem_cols].values).to('cpu')
     data_trajectory['traj'][i]['obs'] = torch.Tensor(traj_i[obs_cols].values).to('cpu')
-    data_trajectory['traj'][i]['actions'] = torch.Tensor(traj_i[ac_col].values.astype(np.int32)).to('cpu').long()
+    data_trajectory['traj'][i]['d_actions'] = torch.Tensor(traj_i[ac_col].values.astype(np.int32)).to('cpu').long()
     data_trajectory['traj'][i]['rewards'] = torch.Tensor(traj_i[rew_col].values).to('cpu')
     data_trajectory['traj'][i]['acuity'] = torch.Tensor(traj_j[acuity_cols].values).to('cpu')
     if sum(traj_i[rew_col].values) > 0:
@@ -140,30 +141,30 @@ for i in trajectories:
 
 observations = torch.zeros((len(trajectories), horizon, num_obs))
 demographics = torch.zeros((len(trajectories), horizon, num_dem)) 
-actions = torch.zeros((len(trajectories), horizon-1, num_actions))
+d_actions = torch.zeros((len(trajectories), horizon-1, num_d_actions))
 lengths = torch.zeros((len(trajectories)), dtype=torch.int)
 times = torch.zeros((len(trajectories), horizon))
 rewards = torch.zeros((len(trajectories), horizon))
 acuities = torch.zeros((len(trajectories), horizon-1, num_acuity_scores))
-action_temp = torch.eye(25)
+d_action_temp = torch.eye(25)
 for ii, traj in enumerate(trajectories):
     obs = data_trajectory['traj'][traj]['obs']
     dem = data_trajectory['traj'][traj]['dem']
-    action = data_trajectory['traj'][traj]['actions'].view(-1,1)
+    d_action = data_trajectory['traj'][traj]['d_actions'].view(-1,1)
     reward = data_trajectory['traj'][traj]['rewards']
     acuity = data_trajectory['traj'][traj]['acuity']
     length = obs.shape[0]
     lengths[ii] = length
-    temp = action_temp[action].squeeze(1)
+    temp = d_action_temp[d_action].squeeze(1)
     observations[ii] = torch.cat((obs, torch.zeros((horizon-length, obs.shape[1]), dtype=torch.float)))
     demographics[ii] = torch.cat((dem, torch.zeros((horizon-length, dem.shape[1]), dtype=torch.float)))
-    actions[ii] = torch.cat((temp, torch.zeros((horizon-length-1, 25), dtype=torch.float)))
+    d_actions[ii] = torch.cat((temp, torch.zeros((horizon-length-1, 25), dtype=torch.float)))
     times[ii] = torch.Tensor(range(horizon))
     rewards[ii] = torch.cat((reward, torch.zeros((horizon-length), dtype=torch.float)))
     acuities[ii] = torch.cat((acuity, torch.zeros((horizon-length-1, acuity.shape[1]), dtype=torch.float)))
 
 # Eliminate single transition trajectories...
-actions = actions[lengths>1.0].to(device)
+d_actions = d_actions[lengths>1.0].to(device)
 observations = observations[lengths>1.0].to(device)
 demographics = demographics[lengths>1.0].to(device)
 times = times[lengths>1.0].to(device)

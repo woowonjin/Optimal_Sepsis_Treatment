@@ -44,20 +44,19 @@ import os
 import copy
 import pickle
 
-from dBCQ_utils import *
 import dqn_utils 
 
 from models import AE,RNN
 from models.common import get_dynamics_losses, pearson_correlation, mask_from_lengths
 
+
 class Experiment(object): 
-    def __init__(self, domain, train_data_file, validation_data_file, test_data_file, minibatch_size, rng, device,
-                 behav_policy_file_wDemo, behav_policy_file,
+    def __init__(self, domain, train_data_file, validation_data_file, test_data_file, writer, minibatch_size, rng, device,
                 context_input=False, context_dim=0, drop_smaller_than_minibatch=True, 
-                folder_name='/Name', autoencoder_saving_period=20, resume=False, sided_Q='negative',  
-                autoencoder_num_epochs=50, autoencoder_lr=0.001, autoencoder='AIS', hidden_size=16, ais_gen_model=1, 
-                ais_pred_model=1, embedding_dim=4, state_dim=42, num_actions=25, corr_coeff_param=10, dst_hypers = {},
-                 cde_hypers = {}, odernn_hypers = {},  **kwargs):
+                folder_name='./data', autoencoder_saving_period=20, resume=False, sided_Q='negative',  
+                autoencoder_num_epochs=50, autoencoder_lr=0.001, autoencoder='AE', hidden_size=16, ais_gen_model=1, 
+                ais_pred_model=1, embedding_dim=4, state_dim=42, num_actions=25, corr_coeff_param=10, 
+                rl_method = 'dqn', **kwargs):
         '''
         We assume discrete actions and scalar rewards!
         '''
@@ -78,6 +77,7 @@ class Experiment(object):
         self.num_actions = num_actions
         self.state_dim = state_dim
         self.corr_coeff_param = corr_coeff_param
+        self.writer = writer
 
         self.context_input = context_input # Check to see if we'll one-hot encode the categorical contextual input
         self.context_dim = context_dim # Check to see if we'll remove the context from the input and only use it for decoding
@@ -95,7 +95,6 @@ class Experiment(object):
             os.mkdir(folder_name + f'/{self.autoencoder_lower}_checkpoints')
         if not os.path.exists(folder_name + f'/{self.autoencoder_lower}_data'):
             os.mkdir(folder_name + f'/{self.autoencoder_lower}_data')
-        self.store_path = folder_name
         self.gen_file = folder_name + f'/{self.autoencoder_lower}_data/{self.autoencoder_lower}_gen.pt'
         self.pred_file = folder_name + f'/{self.autoencoder_lower}_data/{self.autoencoder_lower}_pred.pt'
         
@@ -113,15 +112,14 @@ class Experiment(object):
         else:
             raise NotImplementedError
 
+        self.rl_method = rl_method
+
         self.buffer_save_file = self.data_folder + '/ReplayBuffer'
         self.next_obs_pred_errors_file = self.data_folder + '/test_next_obs_pred_errors.pt'
         self.test_representations_file = self.data_folder + '/test_representations.pt'
         self.test_correlations_file = self.data_folder + '/test_correlations.pt'
-        # TODO: change name of RL methods
-        self.policy_eval_save_file = self.data_folder + '/dBCQ_policy_eval'
-        self.policy_save_file = self.data_folder + '/dBCQ_policy'
-        self.behav_policy_file_wDemo = behav_policy_file_wDemo
-        self.behav_policy_file = behav_policy_file
+        self.policy_eval_save_file = self.data_folder + '/{}_policy_eval'.format(self.rl_method)
+        self.policy_save_file = self.data_folder + '/{}_policy'.format(rl_method)
         
         
         # Read in the data csv files
@@ -152,30 +150,14 @@ class Experiment(object):
         print("Experiment: generator and predictor models loaded.")
 
     def train_autoencoder(self):
+        train_batch_counter = 0
         print('Experiment: training autoencoder')
         device = self.device
         self.optimizer = torch.optim.Adam(list(self.gen.parameters()) + list(self.pred.parameters()), lr=self.autoencoder_lr, amsgrad=True)
 
         self.autoencoding_losses = []
         self.autoencoding_losses_validation = []
-        
-        if self.resume: # Need to rebuild this to resume training for 400 additional epochs if feasible... 
-            try:
-                checkpoint = torch.load(self.checkpoint_file)
-                self.gen.load_state_dict(checkpoint['gen_state_dict'])
-                self.pred.load_state_dict(checkpoint['pred_state_dict'])
-                
-                self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-
-                epoch_0 = checkpoint['epoch'] + 1
-                self.autoencoding_losses = checkpoint['loss']
-                self.autoencoding_losses_validation = checkpoint['validation_loss']
-                print('Starting from epoch: {0} and continuing up to epoch {1}'.format(epoch_0, self.autoencoder_num_epochs))
-            except:
-                epoch_0 = 0
-                print('Error loading file, training from default setting. epoch_0 = 0')
-        else:
-            epoch_0 = 0
+        epoch_0 = 0
 
         for epoch in range(epoch_0, self.autoencoder_num_epochs):
             epoch_loss = []
@@ -183,6 +165,7 @@ class Experiment(object):
 
             # Loop through the data using the data loader
             for ii, (dem, ob, ac, l, t, scores, rewards, idx) in enumerate(self.train_loader):
+                train_batch_counter += 1
                 # print("Batch {}".format(ii),end='')
                 dem = dem.to(device)  # 5 dimensional vector (Gender, Ventilation status, Re-admission status, Age, Weight)
                 ob = ob.to(device)    # 33 dimensional vector (time varying measures)
@@ -194,11 +177,7 @@ class Experiment(object):
                 loss_pred = 0
 
                 # Cut tensors down to the batch's largest sequence length... Trying to speed things up a bit...
-                max_length = int(l.max().item())
-
-                # The following losses are for DDM and will not be modified by any other approach
-                train_loss, dec_loss, inv_loss = 0, 0, 0
-                model_loss, recon_loss, forward_loss = 0, 0, 0                    
+                max_length = int(l.max().item())               
                     
                 self.gen.train()
                 self.pred.train()
@@ -215,7 +194,8 @@ class Experiment(object):
                 
                 loss_pred.backward()
                 self.optimizer.step()
-                epoch_loss.append(loss_pred.detach().cpu().numpy())                
+                epoch_loss.append(loss_pred.detach().cpu().numpy())
+                self.writer.add_scalar('Autoencoder training loss', loss_pred.detach().cpu().numpy(), train_batch_counter)                
                 
                                         
             self.autoencoding_losses.append(epoch_loss)
@@ -225,7 +205,6 @@ class Experiment(object):
                 epoch_validation_loss = []
                 with torch.no_grad():
                     for jj, (dem, ob, ac, l, t, scores, rewards, idx) in enumerate(self.val_loader):
-
                         dem = dem.to(device)
                         ob = ob.to(device)
                         ac = ac.to(device)
@@ -247,7 +226,6 @@ class Experiment(object):
                         self.pred.eval()    
             
                         loss_val, mse_loss, _ = self.container.loop(ob, dem, ac, scores, l, max_length, self.context_input, corr_coeff_param = 0, device=device, autoencoder = self.autoencoder)                                                 
-                    
                         epoch_validation_loss.append(loss_val.detach().cpu().numpy())
                     
                         
@@ -402,6 +380,7 @@ class Experiment(object):
                             self.replay_buffer.add(cur_rep[i_trans].numpy(), cur_actions[i_trans].argmax().item(), next_rep[i_trans].numpy(), cur_rewards[i_trans].item(), done.item(), cur_obs[i_trans].numpy(), next_obs[i_trans].numpy())
 
             ## SAVE OFF DATA
+            # maybe need to save train_representation and val_representation file as well
             # --------------
             self.replay_buffer.save(self.buffer_save_file)
             torch.save(errors, self.next_obs_pred_errors_file)
@@ -409,41 +388,6 @@ class Experiment(object):
             torch.save(correlations, self.test_correlations_file)
   
   
-    def train_dBCQ_policy(self, pol_learning_rate=1e-3):
-
-        # Initialize parameters for policy learning
-        params = {
-            "eval_freq": 500,
-            "discount": 0.99,
-            "buffer_size": 350000,
-            "batch_size": self.minibatch_size,
-            "optimizer": "Adam",
-            "optimizer_parameters": {
-                "lr": pol_learning_rate
-            },
-            "train_freq": 1,
-            "polyak_target_update": True,
-            "target_update_freq": 1,
-            "tau": 0.01,
-            "max_timesteps": 5e5,
-            "BCQ_threshold": 0.3,
-            "buffer_dir": self.buffer_save_file,
-            "policy_file": self.policy_save_file+f'_l{pol_learning_rate}.pt',
-            "pol_eval_file": self.policy_eval_save_file+f'_l{pol_learning_rate}.npy',
-        }
-        
-        # Initialize a dataloader for policy evaluation (will need representations, observations, demographics, rewards and actions from the test dataset)
-        test_representations = torch.load(self.test_representations_file)  # Load the test representations
-        pol_eval_dataset = TensorDataset(test_representations, self.test_states, self.test_interventions, self.test_demog, self.test_rewards)
-        pol_eval_dataloader = DataLoader(pol_eval_dataset, batch_size=self.minibatch_size, shuffle=False)
-
-        # Initialize and Load the experience replay buffer corresponding with the current settings of rand_num, hidden_size, etc...
-        replay_buffer = ReplayBuffer(self.hidden_size, self.minibatch_size, 350000, self.device, encoded_state=True, obs_state_dim=self.state_dim + (self.context_dim if self.context_input else 0))
-
-
-        # Run dBCQ_utils.train_dBCQ
-        train_dBCQ(replay_buffer, self.num_actions, self.hidden_size, self.device, params, pol_eval_dataloader, self.context_input)
-
     def train_DQN_policy(self, pol_learning_rate=1e-3):
 
         # Initialize parameters for policy learning
@@ -476,4 +420,4 @@ class Experiment(object):
 
 
         # Run dBCQ_utils.train_dBCQ
-        dqn_utils.train_DQN(replay_buffer, self.num_actions, self.hidden_size, self.device, params, pol_eval_dataloader, self.context_input)
+        dqn_utils.train_DQN(replay_buffer, self.num_actions, self.hidden_size, self.device, params, pol_eval_dataloader, self.context_input, self.writer)

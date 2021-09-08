@@ -1,5 +1,5 @@
 autoencoder: 'AE' # 'Autoencoder'
-autoencoder_num_epochs: 100          
+autoencoder_num_epochs: 10        
 hidden_size: 64                    
 autoencoder_lr: 0.001   
 autoencoder_saving_period: 10

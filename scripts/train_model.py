@@ -23,41 +23,31 @@ import random
 import os
 import sys
 import pickle
-import click
+import argparse
 import yaml
 import numpy as np
 from experiment import Experiment
-
 import torch
+from torch.utils.tensorboard import SummaryWriter
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(ROOT_DIR)
 np.set_printoptions(suppress=True, linewidth=200, precision=2)
 
-@click.command()
-@click.option('--autoencoder', '-a', type=click.Choice(['AE','RNN']), default='AE')
-@click.option('--domain', '-d', default='sepsis', help="Only 'sepsis' implemented for now")
-@click.option('--options', '-o', multiple=True, nargs=2, type=click.Tuple([str, str]))
-def run(autoencoder, domain, options):
+parser = argparse.ArgumentParser()
+parser.add_argument('--autoencoder', '-a', default='AE')
+parser.add_argument('--domain', '-d', default='sepsis', help="Only 'sepsis' implemented for now")
+parser.add_argument('--rl_method', '-r', default='dqn')
+#parser.add_argument('--options', '-o', multiple=True, nargs=2 )
+
+def run(args):
     dir_path = os.path.dirname(os.path.realpath(__file__))
     params = yaml.safe_load(open(os.path.join(dir_path, '../configs/common.yaml'), 'r'))    
-    cfg_file = os.path.join(dir_path, '../configs/config_' + domain + f'_{autoencoder.lower()}.yaml')
+    cfg_file = os.path.join(dir_path, '../configs/config_' + args.domain + f'_{args.autoencoder.lower()}.yaml')
     model_params = yaml.safe_load(open(cfg_file, 'r'))
-    
-            
+          
     for i in model_params:
         params[i] = model_params[i]        
-
-    # replacing params with command line options
-    for opt in options:
-        print(opt)
-        assert opt[0] in params
-        dtype = type(params[opt[0]])
-        if dtype == bool:
-            new_opt = False if opt[1] != 'True' else True
-        else:
-            new_opt = dtype(opt[1])
-        params[opt[0]] = new_opt
 
     print('Parameters ')
     for key in params:
@@ -71,27 +61,31 @@ def run(autoencoder, domain, options):
     torch.manual_seed(random_seed)
     random_state = np.random.RandomState(random_seed)
     params['rng'] = random_state
-    params['domain'] = domain
+    params['domain'] = args.domain
         
     folder_name = params['storage_path'] + params['folder_location'] + params['folder_name']
     if not os.path.exists(folder_name):
         os.makedirs(folder_name)
     params['folder_name'] = folder_name
     
+    
     torch.set_num_threads(torch.get_num_threads())
     
-    params[f'{autoencoder.lower()}_hypers'] = model_params # Cortex hyperparameter dictionaries 
+    params[f'{args.autoencoder.lower()}_hypers'] = model_params # Cortex hyperparameter dictionaries 
     
     # Experiment
-    experiment = Experiment(**params)    
+    experiment = Experiment(writer = SummaryWriter(), **params)    
     experiment.train_autoencoder()
     experiment.evaluate_trained_model()
-    experiment.train_dBCQ_policy(params['pol_learning_rate'])
-    #experiment.train_DQN_policy(params['pol_learning_rate'])
+    if args.rl_method == 'dqn':
+        experiment.train_DQN_policy(params['pol_learning_rate'])   
+    else:
+        raise NotImplementedError
     print('=' * 30)
 
     with open(folder_name + '/config.yaml', 'w') as y:
         yaml.safe_dump(params, y)  # saving params for reference
 
 if __name__ == '__main__':
-    run()
+    args = parser.parse_args()
+    run(args)

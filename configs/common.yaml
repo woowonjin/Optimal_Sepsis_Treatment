@@ -1,7 +1,7 @@
 device: 'cpu'
 random_seed: 1234 # updated by run scripts
-folder_location: './results/'
-folder_name: 'test' # updated by run scripts
+folder_location: '/data'
+folder_name: '/combined' # updated by run scripts
 resume: False
 minibatch_size: 128
 drop_smaller_than_minibatch: True
@@ -14,11 +14,8 @@ context_dim: 5                     # Number of context/demographic/binary indica
 
 
 # update these manually
-storage_path: '../'
+storage_path: '/Users/huangyong/rl_representations'
 
-train_data_file: '../train_set_tuples'
-validation_data_file: '../val_set_tuples'
-test_data_file: '../test_set_tuples'
-
-behav_policy_file_wDemo: '~/BehavCloning/BC_l1e-5_n64_w0_sgd_withDemo/BC_model.pt'
-behav_policy_file: '~/BehavCloning/BC_l1e-5_n64_w0_sgd/BC_model.pt'
+train_data_file: '/Users/huangyong/rl_representations/train_set_tuples'
+validation_data_file: '/Users/huangyong/rl_representations/val_set_tuples'
+test_data_file: '/Users/huangyong/rl_representations/test_set_tuples'

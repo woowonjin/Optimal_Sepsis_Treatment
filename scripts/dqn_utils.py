@@ -98,7 +98,8 @@ class DQN(object):
 			next_action = q_curr.argmax(1, keepdim=True)
 
 			q_target = self.Q_target(next_state)
-			target_Q = 10*reward + done * self.discount * q_target.gather(1, next_action).reshape(-1, 1)
+			#target_Q = 10*reward + done * self.discount * q_target.gather(1, next_action).reshape(-1, 1)
+			target_Q = reward + done * self.discount * q_target.gather(1, next_action).reshape(-1, 1)
 
 		# Get current Q estimate
 		current_Q = self.Q(state)
@@ -115,7 +116,7 @@ class DQN(object):
 		# Update target network by polyak or full copy every X iterations.
 		self.iterations += 1
 		self.maybe_update_target()
-		return reward, Q_loss.item()
+		return Q_loss.item(), target_Q
 
 
 	def polyak_target_update(self):
@@ -128,7 +129,7 @@ class DQN(object):
 				self.Q_target.load_state_dict(self.Q.state_dict())
 
 
-def train_DQN(replay_buffer, num_actions, state_dim, device, parameters, pol_eval_dataloader, is_demog):
+def train_DQN(replay_buffer, num_actions, state_dim, device, parameters, pol_eval_dataloader, is_demog, writer):
 	# For saving files
 	pol_eval_file = parameters['pol_eval_file']
 	pol_file = parameters['policy_file']
@@ -154,11 +155,10 @@ def train_DQN(replay_buffer, num_actions, state_dim, device, parameters, pol_eva
 	episode_num = 0
 	done = True
 	training_iters = 0
-	writer = SummaryWriter()
 
 	while training_iters < parameters["max_timesteps"]:
 		for _ in range(int(parameters["eval_freq"])):
-			r, l = policy.train(replay_buffer)
+			l, targ_q = policy.train(replay_buffer)
 			
 
 
@@ -168,8 +168,9 @@ def train_DQN(replay_buffer, num_actions, state_dim, device, parameters, pol_eva
 
 		training_iters += int(parameters["eval_freq"])
 		print(f"Training iterations: {training_iters}")
-		writer.add_scalar('Reward', r, training_iters)
+		
 		writer.add_scalar('Loss', l, training_iters)
+		writer.add_scalar('Current Q value', torch.mean(targ_q), training_iters)
 
 def eval_policy():
 	TODO

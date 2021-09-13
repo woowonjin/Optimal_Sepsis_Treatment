@@ -14,8 +14,8 @@ context_dim: 5                     # Number of context/demographic/binary indica
 
 
 # update these manually
-storage_path: '/Users/huangyong/rl_representations'
+storage_path: '/Users/huangyong/reinforcement-learning-for-sepsis'
 
-train_data_file: '/Users/huangyong/rl_representations/train_set_tuples'
-validation_data_file: '/Users/huangyong/rl_representations/val_set_tuples'
-test_data_file: '/Users/huangyong/rl_representations/test_set_tuples'
+train_data_file: '/Users/huangyong/reinforcement-learning-for-sepsis/data/train_set_tuples'
+validation_data_file: '/Users/huangyong/reinforcement-learning-for-sepsis/data/val_set_tuples'
+test_data_file: '/Users/huangyong/reinforcement-learning-for-sepsis/data/test_set_tuples'

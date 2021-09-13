@@ -112,6 +112,8 @@ class ReplayBuffer(object):
         self.reward = np.zeros((self.max_size, 1))
         self.not_done = np.zeros((self.max_size, 1))
 
+        # if encoded_state is True, then the self.states is encoded state representation,
+        # and if encoded_state is False, then the self.state is raw observations
         if encoded_state:
             self.obs_state = np.zeros((self.max_size, obs_state_dim))
             self.next_obs_state = np.zeros((self.max_size, obs_state_dim))
@@ -208,3 +210,36 @@ class ReplayBuffer(object):
             self.crt_size += num_neg
 
         print(f"Replay Buffer loaded with {self.crt_size} elements.")
+
+
+def prepare_bc_data(dem, ob, ac, l, t, dem_context=True):
+    """
+    This is a helper that help extract and process state and action from what returns from dataloaders
+    that could be used to trian 
+    """
+
+    max_length = int(l.max().item())
+
+    ob = ob[:,:max_length,:]
+    dem = dem[:,:max_length,:]
+    ac = ac[:,:max_length,:]
+    
+    cur_obs = ob[:,:-1,:]
+    cur_dem = dem[:,:-1,:]
+    cur_actions = ac[:,:-1,:]
+    mask = (cur_obs==0).all(dim=2)
+    cur_actions = cur_actions[~mask].cpu()
+    #print(cur_actions.shape)
+    cur_actions = cur_actions.argmax(dim=1)
+    #print(cur_actions.shape)
+    
+    cur_obs = cur_obs[~mask].cpu()  # Need to keep track of the actual observations that were made to form the corresponding representations (for downstream WIS)
+    cur_dem = cur_dem[~mask].cpu()
+
+    if not dem_context:
+        state = cur_obs
+    else:
+        state = torch.cat((cur_obs,cur_dem),dim=-1).numpy()
+    action = cur_actions
+    
+    return state, action

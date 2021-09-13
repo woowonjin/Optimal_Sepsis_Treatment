@@ -29,8 +29,82 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import utils
+from utils import prepare_bc_data
 from torch.utils.tensorboard import SummaryWriter
 
+# Simple full-connected supervised network for Behavior Cloning of batch data
+class FC_BC(nn.Module):
+	def __init__(self, state_dim=33, num_actions=25, num_nodes=64):
+		super(FC_BC, self).__init__()
+		self.l1 = nn.Linear(state_dim, num_nodes)
+		self.bn1 = nn.BatchNorm1d(num_nodes)
+		self.l2 = nn.Linear(num_nodes, num_nodes)
+		self.bn2 = nn.BatchNorm1d(num_nodes)
+		self.l3 = nn.Linear(num_nodes, num_actions)
+
+	def forward(self, state):
+		out = F.relu(self.l1(state))
+		out = self.bn1(out)
+		out = F.relu(self.l2(out))
+		out = self.bn2(out)
+		return self.l3(out)
+
+class BehaviorCloning(object):
+	def __init__(self, input_dim, num_actions, num_nodes=256, learning_rate=1e-3, weight_decay=0.1, optimizer_type='adam', device='cpu'):
+		'''Implement a fully-connected network that produces a supervised prediction of the actions
+		preserved in the collected batch of data following observations of patient health.
+		INPUTS:
+		input_dim: int, the dimension of an input array. Default: 33
+		num_actions: int, the number of actions available to choose from. Default: 25
+		num_nodes: int, the number of nodes
+		'''
+
+		self.device = device
+		self.state_shape = input_dim
+		self.num_actions = num_actions
+		self.lr = learning_rate
+
+		# Initialize the network
+		self.model = FC_BC(input_dim, num_actions, num_nodes).to(self.device)
+		self.loss_func = nn.CrossEntropyLoss()
+		if optimizer_type == 'adam':		
+			self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=weight_decay)
+		else:
+			self.optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr, momentum=0.9, weight_decay=weight_decay)
+
+		self.iterations = 0
+
+	def train_epoch(self, train_dataloader, dem_context):
+		'''Sample batches of data from training dataloader, predict actions using the network,
+		Update the parameters of the network using CrossEntropyLoss.'''
+
+		losses = []
+
+		# Loop through the training data 
+		for dem, ob, ac, l, t, scores, _, _ in train_dataloader:
+			state, action = prepare_bc_data(dem, ob, ac, l, t, dem_context)
+			state = state.to(self.device)
+			action = action.to(self.device)
+			
+			# Predict the action with the network
+			pred_actions = self.model(state)
+
+			# Compute loss
+			try:
+				loss = self.loss_func(pred_actions, action.flatten())
+			except:
+				print("LOL ERRORS")
+
+			# Optimize the network
+			self.optimizer.zero_grad()
+			loss.backward()
+			self.optimizer.step()
+
+			losses.append(loss.item())
+
+		self.iterations += 1
+
+		return np.mean(losses)
 
 
 
@@ -172,6 +246,3 @@ def train_DQN(replay_buffer, num_actions, state_dim, device, parameters, pol_eva
 		writer.add_scalar('Loss', l, training_iters)
 		writer.add_scalar('Current Q value', torch.mean(targ_q), training_iters)
 
-def eval_policy():
-	TODO
-	return

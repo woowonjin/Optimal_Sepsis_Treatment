@@ -45,6 +45,7 @@ import copy
 import pickle
 
 import dqn_utils 
+from dqn_utils import FC_BC
 
 from models import AE,RNN
 from models.common import get_dynamics_losses, pearson_correlation, mask_from_lengths
@@ -52,10 +53,11 @@ from models.common import get_dynamics_losses, pearson_correlation, mask_from_le
 
 class Experiment(object): 
     def __init__(self, domain, train_data_file, validation_data_file, test_data_file, writer, minibatch_size, rng, device,
+                behav_policy_file_wDemo, behav_policy_file,
                 context_input=False, context_dim=0, drop_smaller_than_minibatch=True, 
                 folder_name='./data', autoencoder_saving_period=20, resume=False, sided_Q='negative',  
-                autoencoder_num_epochs=50, autoencoder_lr=0.001, autoencoder='AE', hidden_size=16, ais_gen_model=1, 
-                ais_pred_model=1, embedding_dim=4, state_dim=42, num_actions=25, corr_coeff_param=10, 
+                autoencoder_num_epochs=50, autoencoder_lr=0.001, autoencoder='AE', hidden_size=16, 
+                state_dim=42, num_actions=25, corr_coeff_param=10, 
                 rl_method = 'dqn', **kwargs):
         '''
         We assume discrete actions and scalar rewards!
@@ -120,6 +122,8 @@ class Experiment(object):
         self.test_correlations_file = self.data_folder + '/test_correlations.pt'
         self.policy_eval_save_file = self.data_folder + '/{}_policy_eval'.format(self.rl_method)
         self.policy_save_file = self.data_folder + '/{}_policy'.format(rl_method)
+        self.behav_policy_file_wDemo = behav_policy_file_wDemo
+        self.behav_policy_file = behav_policy_file
         
         
         # Read in the data csv files
@@ -418,6 +422,15 @@ class Experiment(object):
         # Initialize and Load the experience replay buffer corresponding with the current settings of rand_num, hidden_size, etc...
         replay_buffer = ReplayBuffer(self.hidden_size, self.minibatch_size, 350000, self.device, encoded_state=True, obs_state_dim=self.state_dim + (self.context_dim if self.context_input else 0))
 
+        # Load the pretrained policy for whether or not the demographic context was used to train the representations 
+        behav_input = self.state_dim + (self.context_dim if self.context_input else 0)
+        behav_pol = FC_BC(behav_input, self.num_actions, 256).to(self.device)
+        if self.context_input:
+            behav_pol.load_state_dict(torch.load(self.behav_policy_file_wDemo))
+        else:
+            behav_pol.load_state_dict(torch.load(self.behav_policy_file))
+        behav_pol.eval()
+
 
         # Run dBCQ_utils.train_dBCQ
-        dqn_utils.train_DQN(replay_buffer, self.num_actions, self.hidden_size, self.device, params, pol_eval_dataloader, self.context_input, self.writer)
+        dqn_utils.train_DQN(replay_buffer, self.num_actions, self.hidden_size, self.device, params, behav_pol, pol_eval_dataloader, self.context_input, self.writer)

@@ -34,7 +34,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 # Simple full-connected supervised network for Behavior Cloning of batch data
 class FC_BC(nn.Module):
-	def __init__(self, state_dim=33, num_actions=25, num_nodes=64):
+	def __init__(self, state_dim=33, num_actions=25, num_nodes=256):
 		super(FC_BC, self).__init__()
 		self.l1 = nn.Linear(state_dim, num_nodes)
 		self.bn1 = nn.BatchNorm1d(num_nodes)
@@ -50,7 +50,7 @@ class FC_BC(nn.Module):
 		return self.l3(out)
 
 class BehaviorCloning(object):
-	def __init__(self, input_dim, num_actions, num_nodes=256, learning_rate=1e-3, weight_decay=0.1, optimizer_type='adam', device='cpu'):
+	def __init__(self, input_dim, num_actions, num_nodes=256, learning_rate=1e-3, weight_decay=0.1, optimizer_type='adam', device='cuda'):
 		'''Implement a fully-connected network that produces a supervised prediction of the actions
 		preserved in the collected batch of data following observations of patient health.
 		INPUTS:
@@ -110,7 +110,7 @@ class BehaviorCloning(object):
 
 # Simple fully-connected Q-network for the policy
 class FC_Q(nn.Module):
-	def __init__(self, state_dim, num_actions, num_nodes=128):
+	def __init__(self, state_dim, num_actions, num_nodes=256):
 		super(FC_Q, self).__init__()
 		self.q1 = nn.Linear(state_dim, num_nodes)
 		self.q2 = nn.Linear(num_nodes, num_nodes)
@@ -203,7 +203,7 @@ class DQN(object):
 				self.Q_target.load_state_dict(self.Q.state_dict())
 
 
-def train_DQN(replay_buffer, num_actions, state_dim, device, parameters, pol_eval_dataloader, is_demog, writer):
+def train_DQN(replay_buffer, num_actions, state_dim, device, parameters, behav_pol, pol_eval_dataloader, is_demog, writer):
 	# For saving files
 	pol_eval_file = parameters['pol_eval_file']
 	pol_file = parameters['policy_file']
@@ -226,8 +226,6 @@ def train_DQN(replay_buffer, num_actions, state_dim, device, parameters, pol_eva
 	replay_buffer.load(buffer_dir, bootstrap=True)
 
 	evaluations = []
-	episode_num = 0
-	done = True
 	training_iters = 0
 
 	while training_iters < parameters["max_timesteps"]:
@@ -236,8 +234,8 @@ def train_DQN(replay_buffer, num_actions, state_dim, device, parameters, pol_eva
 			
 
 
-		#evaluations.append(eval_policy(policy, behav_pol, pol_eval_dataloader, parameters["discount"], is_demog, device))  # TODO Run weighted importance sampling with learned policy and behavior policy
-		#np.save(pol_eval_file, evaluations)
+		evaluations.append(eval_policy(policy, behav_pol, pol_eval_dataloader, parameters["discount"], is_demog, device))  # TODO Run weighted importance sampling with learned policy and behavior policy
+		np.save(pol_eval_file, evaluations)
 		torch.save({'policy_Q_function':policy.Q.state_dict(), 'policy_Q_target':policy.Q_target.state_dict()}, pol_file)
 
 		training_iters += int(parameters["eval_freq"])
@@ -245,4 +243,64 @@ def train_DQN(replay_buffer, num_actions, state_dim, device, parameters, pol_eva
 		
 		writer.add_scalar('Loss', l, training_iters)
 		writer.add_scalar('Current Q value', torch.mean(targ_q), training_iters)
+
+def eval_policy(policy, behav_policy, pol_dataloader, discount, is_demog, device):
+
+	wis_est = []
+	wis_returns = 0
+	wis_weighting = 0
+
+	# Loop through the dataloader (representations, observations, actions, demographics, rewards)
+	for representations, obs_state, actions, demog, rewards in pol_dataloader:
+		representations = representations.to(device)
+		obs_state = obs_state.to(device)
+		actions = actions.to(device)
+		demog = demog.to(device)
+
+		cur_obs, cur_actions = obs_state[:,:-2,:], actions[:,:-1,:].argmax(dim=-1)
+		cur_demog, cur_rewards = demog[:,:-2,:], rewards[:,:-2]
+
+		# Mask out the data corresponding to the padded observations
+		mask = (cur_obs==0).all(dim=2)
+
+		# Compute the discounted rewards for each trajectory in the minibatch
+		discount_array = torch.Tensor(discount**np.arange(cur_rewards.shape[1]))[None,:]
+		discounted_rewards = (discount_array * cur_rewards).sum(dim=-1).squeeze()
+
+		# Evaluate the probabilities of the observed action according to the trained policy and the behavior policy
+		with torch.no_grad():
+			if is_demog:  # Gather the probability from the observed behavior policy
+				p_obs = F.softmax(behav_policy(torch.cat((cur_obs.flatten(end_dim=1), cur_demog.flatten(end_dim=1)), dim=-1)), dim=-1).gather(1, cur_actions.flatten()[:,None]).reshape(cur_obs.shape[:2])
+			else:
+				p_obs = F.softmax(behav_policy(cur_obs.flatten(end_dim=1)), dim=-1).gather(1, cur_actions.flatten()[:,None]).reshape(cur_obs.shape[:2])
+			
+			q_val = policy.Q(representations)  # Compute the Q values of the dBCQ policy
+			p_new = F.softmax(q_val, dim=-1).gather(2, cur_actions[:,:,None]).squeeze()  # Gather the probabilities from the trained policy
+
+		# Check for whether there are any zero probabilities in p_obs and replace with small probability since behav_pol may mispredict actual actions...
+		if not (p_obs > 0).all(): 
+			p_obs[p_obs==0] = 0.1
+
+		# Eliminate spurious probabilities due to padded observations after trajectories have concluded 
+		# We do this by forcing the probabilities for these observations to be 1 so they don't affect the product
+		p_obs[mask] = 1.
+		p_new[mask] = 1.
+
+		cum_ir = torch.clamp((p_new / p_obs).prod(axis=1), 1e-30, 1e4)
+
+		# wis_idx = (cum_ir > 0)  # TODO check that wis_idx isn't empty (all zero)
+		# if wis_idx.sum() == 0:
+		# 	import pdb; pdb.set_trace()
+
+		# wis = (cum_ir / cum_ir.mean()).cpu() * discounted_rewards  # TODO check that there aren't any nans
+		# wis_est.extend(wis.cpu().numpy())
+		wis_rewards = cum_ir.cpu() * discounted_rewards
+		wis_returns +=  wis_rewards.sum().item()
+		wis_weighting += cum_ir.cpu().sum().item()
+
+	wis_eval = (wis_returns / wis_weighting) 
+	print("---------------------------------------")
+	print(f"Evaluation over the test set: {wis_eval:.3f}")
+	print("---------------------------------------")
+	return wis_eval
 

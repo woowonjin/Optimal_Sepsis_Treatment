@@ -1,8 +1,8 @@
 autoencoder: 'AE' # 'Autoencoder'
-autoencoder_num_epochs: 10        
-hidden_size: 64                    
-autoencoder_lr: 0.001   
+autoencoder_num_epochs: 400       
+hidden_size: 256              
+autoencoder_lr: 0.00 
 autoencoder_saving_period: 10
 corr_coeff_param: 0               
-context_input: True   
+context_input: False 
 pol_learning_rate: 0.0001

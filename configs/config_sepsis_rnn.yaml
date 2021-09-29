@@ -1,6 +1,6 @@
 autoencoder: 'RNN' 
 autoencoder_num_epochs: 500          
-hidden_size: 64                    
+hidden_size: 256                    
 autoencoder_lr: 0.001               
 corr_coeff_param: 0              
 context_input: True              

@@ -55,7 +55,8 @@ def run(args):
     print('=' * 30)
 
     # process param keys and values to match input to Cortex
-    params['device'] = torch.device(params["device"])
+    device_str = params["device"]
+    params['device'] = torch.device(device_str)
     random_seed = params['random_seed']
     np.random.seed(random_seed)
     torch.manual_seed(random_seed)
@@ -82,6 +83,8 @@ def run(args):
     else:
         raise NotImplementedError
     print('=' * 30)
+
+    params['device'] = device_str
 
     with open(folder_name + '/config.yaml', 'w') as y:
         yaml.safe_dump(params, y)  # saving params for reference

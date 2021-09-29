@@ -23,15 +23,15 @@ import torch
 import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
 
-from dqn_utils import BehaviorCloning, prepare_bc_data
-from utils import ReplayBuffer
+from dqn_utils import BehaviorCloning
+from utils import prepare_bc_data
 
 
-def run(BC_network, train_dataloader, val_dataloader, num_epochs, storage_dir, loss_func, dem_context):
+
+def run(BC_network, train_dataloader, val_dataloader, num_epochs, storage_dir, loss_func, dem_context, device):
     # Construct training and validation loops
     validation_losses = []
     training_losses = []
-    training_iters = 0
     eval_frequency = 100
 	
     for i_epoch in range(num_epochs):
@@ -45,8 +45,8 @@ def run(BC_network, train_dataloader, val_dataloader, num_epochs, storage_dir, l
             with torch.no_grad():
                 for dem, ob, ac, l, t, scores, _, _ in val_dataloader:
                     val_state, val_action = prepare_bc_data(dem, ob, ac, l, t, dem_context)
-                    val_state = val_state.to(torch.device('cpu'))
-                    val_action = val_action.to(torch.device('cpu'))
+                    val_state = val_state.to(torch.device(device))
+                    val_action = val_action.to(torch.device(device))
                     pred_actions = BC_network.model(val_state)
                     try:
                         eval_loss = loss_func(pred_actions, val_action.flatten())
@@ -61,7 +61,10 @@ def run(BC_network, train_dataloader, val_dataloader, num_epochs, storage_dir, l
 
             print(f"Training iterations: {i_epoch}, Validation Loss: {mean_val_loss}")
             # Save off and store trained BC model
-            torch.save(BC_network.model.state_dict(), storage_dir+'BC_model.pt')
+            if dem_context:
+                torch.save(BC_network.model.state_dict(), storage_dir+'BC_model.pt')
+            else:
+                torch.save(BC_network.model.state_dict(), storage_dir+'BC_model.pt')
 
             BC_network.model.train()
     
@@ -74,25 +77,33 @@ if __name__ == '__main__':
     # Define input arguments and parameters
     parser = argparse.ArgumentParser()
     parser.add_argument('--demographics', dest='dem_context', default=False, action='store_true')
-    parser.add_argument('--num_nodes', dest='num_nodes', default=128, type=int)
-    parser.add_argument('--learning_rate', dest='learning_rate', default=1e-4, type=float)
-    parser.add_argument('--storage_folder', dest='storage_folder', default='test', type=str)
+    parser.add_argument('--num_nodes', dest='num_nodes', default=256, type=int)
+    parser.add_argument('--learning_rate', dest='learning_rate', default=3e-5, type=float)
     parser.add_argument('--batch_size', dest='batch_size', default=128, type=int)
-    parser.add_argument('--num_epochs', dest='num_epochs', default=5000, type=int)
+    parser.add_argument('--num_epochs', dest='num_epochs', default=500, type=int)
     parser.add_argument('--weight_decay', dest='weight_decay', default=0.1, type=float)
     parser.add_argument('--optimizer_type', dest='optim_type', default='adam', type=str)
+    parser.add_argument('--device', dest='device', default='cuda', type=str)
+    parser.add_argument('--num_actions', dest='num_actions', default=25, type=int)
+    parser.add_argument('--train_data_file', dest='train_data_file',
+     default='/home/yong/reinforcement-learning-for-sepsis/data/train_set_tuples', type=str)
+    parser.add_argument('--val_data_file', dest='val_data_file',
+     default='/home/yong/reinforcement-learning-for-sepsis/data/val_set_tuples', type=str)
+    parser.add_argument('--storage_dir', dest='storage_dir', default='/home/yong/reinforcement-learning-for-sepsis/test/', type=str)
+
+
+
 
     args = parser.parse_args()
-
-    device = torch.device('cpu')
-
+    device = torch.device(args.device)
     input_dim = 38 if args.dem_context else 33
-    num_actions = 25
+    num_actions = args.num_actions
 
-    train_data_file = '../data/train_set_tuples'
-    val_data_file = '../data/val_set_tuples'
-    minibatch_size = 128
-    storage_dir = '/Users/huangyong/reinforcement-learning-for-sepsis/' + args.storage_folder + '/'
+
+    train_data_file = args.train_data_file
+    val_data_file = args.val_data_file
+    minibatch_size = args.batch_size
+    storage_dir = args.storage_dir
 
     train_demog, train_states, train_interventions, train_lengths, train_times, acuities, rewards = torch.load(train_data_file)
     train_idx = torch.arange(train_demog.shape[0])
@@ -113,4 +124,4 @@ if __name__ == '__main__':
 
     loss_func = nn.CrossEntropyLoss()
 
-    run(BC_network, train_loader, val_loader, args.num_epochs, storage_dir, loss_func, args.dem_context)
+    run(BC_network, train_loader, val_loader, args.num_epochs, storage_dir, loss_func, args.dem_context, device)
